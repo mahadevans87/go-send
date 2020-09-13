@@ -8,10 +8,18 @@ import (
 
 // PeerInfo Data Model
 type PeerInfo struct {
+	Token    string `json:"token"`
+	ID       string `json:"id"`
+	Messages chan Message
+}
+
+// Message Data Model
+type Message struct {
+	Type  string
 	Token string `json:"token"`
-	Sdp   string `json:"sdp"`
-	id    string `json:"id"`
-	offerer bool
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Data  string `json:"data"`
 }
 
 func main() {
@@ -25,15 +33,20 @@ func main() {
 		token := c.Query("token")
 		peers := tokenPeers[token]
 		if peers == nil {
-			peers = make([]*PeerInfo, 2)
-		} else if len(peers) == 2 {
+			peers = make([]*PeerInfo, 0)
+			tokenPeers[token] = peers
+		}
+		if len(peers) == 2 {
 			c.JSON(400, gin.H{
 				"error": "Cannot add additional peer to token",
 			})
 		} else {
 			peerID := len(peers) + 1
-			peerInfo.id = fmt.Sprint(peerID)
+			peerInfo.ID = fmt.Sprint(peerID)
+			peerInfo.Token = token
+			peerInfo.Messages = make(chan Message, 10)
 			peers = append(peers, &peerInfo)
+			tokenPeers[token] = peers
 			c.JSON(200, gin.H{
 				"message": "OK",
 				"peerId":  peerID,
@@ -43,22 +56,28 @@ func main() {
 
 	// Set the offer by the first peer.
 	r.POST("/offer", func(c *gin.Context) {
-		var peerInfo PeerInfo
-		c.BindJSON(&peerInfo)
-		if peers := tokenPeers[peerInfo.Token]; peers != nil {
-			foundPeer := false
+		var message Message
+		c.BindJSON(&message)
+		if peers := tokenPeers[message.Token]; peers != nil {
+			foundSender := false
+			foundReceiver := false
+			var receiverPeer *PeerInfo
 			for _, peer := range peers {
-				if peer.id == peerInfo.id {
-					peer.Sdp = peerInfo.Sdp
-					peer.offerer = true
-					foundPeer = true
-					break
+				if peer.ID == message.From {
+					foundSender = true
+				}
+				if peer.ID == message.To {
+					foundReceiver = true
+					receiverPeer = peer
 				}
 			}
-			if foundPeer == true {
+			if foundSender && foundReceiver {
+				message.Type = "OFFER"
+				receiverPeer.Messages <- message
 				c.JSON(200, gin.H{
 					"message": "OK. Offer Submitted",
 				})
+
 			} else {
 				c.JSON(401, gin.H{
 					"message": "UnAuthorized. No such peer",
@@ -72,24 +91,36 @@ func main() {
 	})
 
 	// Get the offer from the first peer by the other peer(s)
-	r.GET("/offer", func(c *gin.Context) {
+	r.GET("/messages", func(c *gin.Context) {
 		token := c.Query("token")
 		peerID := c.Query("id")
-		var offerSdp string;
+
 		if peers := tokenPeers[token]; peers != nil {
-			foundPeer := false
+			var foundPeer *PeerInfo
+			messages := make([]Message, 0)
+
 			for _, peer := range peers {
-				if peer.id == peerID {
-					foundPeer = true
-				}
-				if peer.offerer == true {
-					offerSdp = peer.Sdp
+				if peer.ID == peerID {
+					foundPeer = peer
+					break
 				}
 			}
-			if foundPeer == true {
+			if foundPeer != nil {
+				hasMoreMessages := true
+				for {
+					if !hasMoreMessages {
+						break
+					}
+					select {
+					case msg := <-foundPeer.Messages:
+						messages = append(messages, msg)
+					default:
+						hasMoreMessages = false
+					}
+				}
 				c.JSON(200, gin.H{
 					"message": "OK",
-					"offer_sdp": 
+					"data":    messages,
 				})
 			} else {
 				c.JSON(401, gin.H{
