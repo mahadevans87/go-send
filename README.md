@@ -11,4 +11,4 @@ A Pure Go implementation for P2P File Transfer
   
 * A Signalling server that can connect between many go-send clients
 
-* An electron Desktop application
+* An electron Desktop application 
