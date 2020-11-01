@@ -54,6 +54,32 @@ func main() {
 		}
 	})
 
+	r.GET("/peers", func(c *gin.Context) {
+		token := c.Query("token")
+		peerID := c.Query("id")
+		foundPeer := false
+		resultPeers := make([]*PeerInfo, 0)
+		if peers := tokenPeers[token]; peers != nil {
+			for _, peer := range peers {
+				if peerID == peer.ID {
+					foundPeer = true
+				} else {
+					resultPeers = append(resultPeers, peer)
+				}
+			}
+			if foundPeer {
+				c.JSON(200, gin.H{
+					"message": "OK",
+					"peers":   resultPeers,
+				})
+			} else {
+				c.JSON(401, gin.H{
+					"message": "UnAuthorized",
+				})
+			}
+		}
+	})
+
 	// Set the offer by the first peer.
 	r.POST("/offer", func(c *gin.Context) {
 		var message Message
