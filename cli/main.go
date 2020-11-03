@@ -16,17 +16,12 @@ const signalBaseURL = "http://localhost:8080"
 // ConnectionInfo can be shared between packages
 type ConnectionInfo struct {
 	Message string `json:"message"`
-	PeerID  int    `json:"peerID"`
+	id  int    `json:"peerID"`
+	peers []*PeerInfo
 	token   string
 	mode    string
 }
 
-// PeerInfo Data Model
-type PeerInfo struct {
-	Token    string `json:"token"`
-	ID       string `json:"id"`
-	Messages chan Message
-}
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
