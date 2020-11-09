@@ -13,15 +13,28 @@ import (
 
 const signalBaseURL = "http://localhost:8080"
 
+// PeerInfo Data Model
+type PeerInfo struct {
+	Token string `json:"token"`
+	ID    string `json:"id"`
+}
+
 // ConnectionInfo can be shared between packages
 type ConnectionInfo struct {
 	Message string `json:"message"`
-	id  int    `json:"peerID"`
-	peers []*PeerInfo
+	id      int    `json:"peerID"`
+	peers   []*PeerInfo
 	token   string
 	mode    string
 }
 
+type AppError struct {
+	cause string
+}
+
+func (appError *AppError) Error() string {
+	return fmt.Sprintf(appError.cause)
+}
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
@@ -54,7 +67,7 @@ func registerToken(token string, connectionInfo *ConnectionInfo) error {
 }
 
 func fetchPeerList(connectionInfo *ConnectionInfo) error {
-	resp, err := httpClient.Get(fmt.Sprintf("%s/peers?token=%s&id=%s", signalBaseURL, connectionInfo.token, connectionInfo.PeerID))
+	resp, err := httpClient.Get(fmt.Sprintf("%s/peers?token=%s&id=%s", signalBaseURL, connectionInfo.token, connectionInfo.id))
 	if err != nil {
 		log.Fatal(err)
 		return err
@@ -63,8 +76,8 @@ func fetchPeerList(connectionInfo *ConnectionInfo) error {
 
 	if resp.StatusCode == http.StatusOK {
 		type PeerResponse struct {
-			message string `json:"message"`,
-			peers []PeerInfo `json:"peers"`,
+			message string      `json:"message"`
+			peers   []*PeerInfo `json:"peers"`
 		}
 		var peerResponse PeerResponse
 
@@ -74,8 +87,11 @@ func fetchPeerList(connectionInfo *ConnectionInfo) error {
 			return decodeErr
 		} else {
 			// For now there is only one peer. We need to write a proper client later on
-			*connectionInfo.PeerID = peerResponse.peers[0];
+			connectionInfo.peers = peerResponse.peers
+			return nil
 		}
+	} else {
+		return &AppError{"There was an internal server error."}
 	}
 }
 
@@ -96,19 +112,22 @@ func main() {
 		log.Fatal(err)
 	} else {
 		// success we have connected
-		log.Println(connectionInfo.PeerID)
+		log.Println(connectionInfo.id, sourcePath)
 
-		// Fetch PeerInfo
-		if peerInfoFetchErr := fetchPeerList(&connectionInfo); peerInfoFetchErr != nil {
-			log.Fatal(peerInfoFetchErr)
-		} else {
-			
-		}
+		peersAvailable := make(chan bool)
+
+		go func(peersFound chan bool, connectionInfoPtr *ConnectionInfo) {
+			// Fetch PeerInfo
+			if peerInfoFetchErr := fetchPeerList(connectionInfoPtr); peerInfoFetchErr != nil {
+				log.Fatal(peerInfoFetchErr)
+			} else {
+			}
+		}(peersAvailable, &connectionInfo)
 
 		switch *mode {
 		case "S":
-			client = Client(&connectionInfo)
-			client.SetSourcePath(*sourcePath)
+			//client = Client(&connectionInfo)
+			//client.SetSourcePath(*sourcePath)
 		case "R":
 		default:
 			flag.PrintDefaults()

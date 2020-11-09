@@ -1,4 +1,4 @@
-module go-send
+module github.com/mahadevans87/go-send/signal
 
 go 1.15
 
