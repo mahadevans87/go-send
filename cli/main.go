@@ -66,8 +66,8 @@ func registerToken(token string, connectionInfo *ConnectionInfo) error {
 	return err
 }
 
-func fetchPeerList(connectionInfo *ConnectionInfo) error {
-	resp, err := httpClient.Get(fmt.Sprintf("%s/peers?token=%s&id=%s", signalBaseURL, connectionInfo.token, connectionInfo.id))
+func fetchPeerListFromServer(connectionInfo *ConnectionInfo) error {
+	resp, err := httpClient.Get(fmt.Sprintf("%s/peers?token=%s&id=%d", signalBaseURL, connectionInfo.token, connectionInfo.id))
 	if err != nil {
 		log.Fatal(err)
 		return err
@@ -76,8 +76,8 @@ func fetchPeerList(connectionInfo *ConnectionInfo) error {
 
 	if resp.StatusCode == http.StatusOK {
 		type PeerResponse struct {
-			message string      `json:"message"`
-			peers   []*PeerInfo `json:"peers"`
+			Message string      `json:"message"`
+			Peers   []*PeerInfo `json:"peers"`
 		}
 		var peerResponse PeerResponse
 
@@ -87,11 +87,25 @@ func fetchPeerList(connectionInfo *ConnectionInfo) error {
 			return decodeErr
 		} else {
 			// For now there is only one peer. We need to write a proper client later on
-			connectionInfo.peers = peerResponse.peers
+			connectionInfo.peers = peerResponse.Peers
 			return nil
 		}
 	} else {
 		return &AppError{"There was an internal server error."}
+	}
+}
+
+func fetchPeerList(peersFound chan bool, connectionInfoPtr *ConnectionInfo) {
+	// Fetch PeerInfo
+	if peerInfoFetchErr := fetchPeerListFromServer(connectionInfoPtr); peerInfoFetchErr != nil {
+		log.Fatal(peerInfoFetchErr)
+	} else {
+		if len(connectionInfoPtr.peers) == 0 {
+			log.Println("Waiting for peers...")
+			fetchPeerList(peersFound, connectionInfoPtr)
+		} else {
+			peersFound <- true
+		}
 	}
 }
 
@@ -115,14 +129,11 @@ func main() {
 		log.Println(connectionInfo.id, sourcePath)
 
 		peersAvailable := make(chan bool)
+		go fetchPeerList(peersAvailable, &connectionInfo)
 
-		go func(peersFound chan bool, connectionInfoPtr *ConnectionInfo) {
-			// Fetch PeerInfo
-			if peerInfoFetchErr := fetchPeerList(connectionInfoPtr); peerInfoFetchErr != nil {
-				log.Fatal(peerInfoFetchErr)
-			} else {
-			}
-		}(peersAvailable, &connectionInfo)
+		// Wait till peers are available.
+		<-peersAvailable
+		log.Println(connectionInfo.peers)
 
 		switch *mode {
 		case "S":
