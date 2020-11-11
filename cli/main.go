@@ -22,18 +22,19 @@ type PeerInfo struct {
 // ConnectionInfo can be shared between packages
 type ConnectionInfo struct {
 	Message string `json:"message"`
-	id      int    `json:"peerID"`
+	ID      int    `json:"peerID"`
 	peers   []*PeerInfo
 	token   string
 	mode    string
 }
 
+// AppError holds generic errors that the app reports.
 type AppError struct {
-	cause string
+	Cause string
 }
 
 func (appError *AppError) Error() string {
-	return fmt.Sprintf(appError.cause)
+	return fmt.Sprintf(appError.Cause)
 }
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
@@ -62,12 +63,23 @@ func registerToken(token string, connectionInfo *ConnectionInfo) error {
 			log.Fatal(decodeErr)
 			return decodeErr
 		}
+
+		// set the token to connectionInfo
+		connectionInfo.token = token
+	} else {
+		errorMap := make(map[string]string)
+		if decodeErr := json.NewDecoder(resp.Body).Decode(&errorMap); decodeErr == nil {
+			return &AppError{errorMap["error"]}
+		} else {
+			return decodeErr
+		}
+
 	}
 	return err
 }
 
 func fetchPeerListFromServer(connectionInfo *ConnectionInfo) error {
-	resp, err := httpClient.Get(fmt.Sprintf("%s/peers?token=%s&id=%d", signalBaseURL, connectionInfo.token, connectionInfo.id))
+	resp, err := httpClient.Get(fmt.Sprintf("%s/peers?token=%s&id=%d", signalBaseURL, connectionInfo.token, connectionInfo.ID))
 	if err != nil {
 		log.Fatal(err)
 		return err
@@ -126,7 +138,7 @@ func main() {
 		log.Fatal(err)
 	} else {
 		// success we have connected
-		log.Println(connectionInfo.id, sourcePath)
+		log.Println(connectionInfo.ID, sourcePath)
 
 		peersAvailable := make(chan bool)
 		go fetchPeerList(peersAvailable, &connectionInfo)
