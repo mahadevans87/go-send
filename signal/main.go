@@ -8,9 +8,9 @@ import (
 
 // PeerInfo Data Model
 type PeerInfo struct {
-	Token    string `json:"token"`
-	ID       string `json:"id"`
-	Messages chan Message
+	Token    string       `json:"token"`
+	ID       string       `json:"id"`
+	Messages chan Message `json:"-"`
 }
 
 // Message Data Model
