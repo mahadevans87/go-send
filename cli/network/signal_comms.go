@@ -56,7 +56,7 @@ func RegisterToken(token string, connectionInfo *domain.ConnectionInfo) error {
 func FetchPeerListFromServer(connectionInfo *domain.ConnectionInfo) error {
 	var httpClient = &http.Client{Timeout: 10 * time.Second}
 
-	resp, err := httpClient.Get(fmt.Sprintf("%s/peers?token=%s&id=%d", domain.SignalBaseURL, connectionInfo.Token, connectionInfo.ID))
+	resp, err := httpClient.Get(fmt.Sprintf("%s/peers?token=%s&id=%s", domain.SignalBaseURL, connectionInfo.Token, connectionInfo.ID))
 	if err != nil {
 		log.Fatal(err)
 		return err
@@ -81,5 +81,32 @@ func FetchPeerListFromServer(connectionInfo *domain.ConnectionInfo) error {
 		}
 	} else {
 		return &AppError{"There was an internal server error."}
+	}
+}
+
+// FetchPendingMessages - Fetches SDP / ICE messages from other clients
+func FetchPendingMessages(connectionInfo *domain.ConnectionInfo) (*domain.Messages, error) {
+	var httpClient = &http.Client{Timeout: 60 * time.Second}
+
+	resp, err := httpClient.Get(fmt.Sprintf("%s/messages?token=%s&id=%s", domain.SignalBaseURL, connectionInfo.Token, connectionInfo.ID))
+	if err != nil {
+		log.Fatal(err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var pendingMessages domain.Messages
+
+		decodeErr := json.NewDecoder(resp.Body).Decode(&pendingMessages)
+		if decodeErr != nil {
+			log.Fatal(decodeErr)
+			return nil, decodeErr
+		} else {
+			// For now there is only one peer. We need to write a proper client later on
+			return &pendingMessages, nil
+		}
+	} else {
+		return nil, &AppError{"There was an internal server error."}
 	}
 }
