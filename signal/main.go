@@ -49,7 +49,7 @@ func main() {
 			tokenPeers[token] = peers
 			c.JSON(200, gin.H{
 				"message": "OK",
-				"peerId":  peerID,
+				"peerId":  peerInfo.ID,
 			})
 		}
 	})
@@ -81,7 +81,7 @@ func main() {
 	})
 
 	// Set the offer by the first peer.
-	r.POST("/offer", func(c *gin.Context) {
+	r.POST("/message", func(c *gin.Context) {
 		var message Message
 		c.BindJSON(&message)
 		if peers := tokenPeers[message.Token]; peers != nil {
@@ -98,7 +98,6 @@ func main() {
 				}
 			}
 			if foundSender && foundReceiver {
-				message.Type = "OFFER"
 				receiverPeer.Messages <- message
 				c.JSON(200, gin.H{
 					"message": "OK. Offer Submitted",
