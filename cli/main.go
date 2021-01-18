@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/mahadevans87/go-send/cli/client"
 	"github.com/mahadevans87/go-send/cli/domain"
 	"github.com/mahadevans87/go-send/cli/network"
 
@@ -78,6 +79,7 @@ func main() {
 
 		switch *mode {
 		case "S":
+			client.Connect(&connectionInfo)
 			//client = Client(&connectionInfo)
 			//client.SetSourcePath(*sourcePath)
 		case "R":
@@ -87,5 +89,7 @@ func main() {
 		}
 
 	}
+
+	select {}
 
 }
