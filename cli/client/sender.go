@@ -132,7 +132,7 @@ func Connect(connectionInfo *domain.ConnectionInfo) {
 
 	// Wrap it onto our Message object
 	sdpMessage := domain.Message{
-		Data:  offer,
+		Data:  offer.SDP,
 		From:  connectionInfo.ID,
 		To:    connectionInfo.Peers[0].ID,
 		Token: connectionInfo.Token,
