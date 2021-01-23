@@ -80,15 +80,17 @@ func main() {
 		switch *mode {
 		case "S":
 			connectionInfo.Mode = "S"
-			pionClient := &client.PionClient{
-				ConnectionInfo: &connectionInfo,
-			}
-			pionClient.Connect()
 		case "R":
+			connectionInfo.Mode = "R"
 		default:
 			flag.PrintDefaults()
 			os.Exit(1)
 		}
+
+		pionClient := &client.PionClient{
+			ConnectionInfo: &connectionInfo,
+		}
+		pionClient.Connect()
 
 	}
 

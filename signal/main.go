@@ -16,10 +16,10 @@ type PeerInfo struct {
 // Message Data Model
 type Message struct {
 	Type  string
-	Token string `json:"token"`
-	From  string `json:"from"`
-	To    string `json:"to"`
-	Data  string `json:"data"`
+	Token string      `json:"token"`
+	From  string      `json:"from"`
+	To    string      `json:"to"`
+	Data  interface{} `json:"data"`
 }
 
 func main() {

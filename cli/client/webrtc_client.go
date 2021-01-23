@@ -48,7 +48,7 @@ func (pionClient *PionClient) Connect() {
 
 	// start polling for client messages
 	stopPolling := make(chan bool, 1)
-	go pollMessages(stopPolling, peerConnection, &candidatesMux, pendingCandidates, pionClient.ConnectionInfo)
+	go pionClient.pollMessages(stopPolling, peerConnection, &candidatesMux, pendingCandidates, pionClient.ConnectionInfo)
 
 	// When an ICE candidate is available send to the other Pion instance
 	// the other Pion instance will add this candidate by calling AddICECandidate
@@ -108,6 +108,7 @@ func (pionClient *PionClient) Connect() {
 			}
 
 		}
+		fmt.Println("Done!")
 	})
 
 	// Register text message handling
@@ -137,30 +138,36 @@ func handleSDP(peerConnection *webrtc.PeerConnection,
 	candidatesMux *sync.Mutex,
 	pendingCandidates []*webrtc.ICECandidate,
 	incomingMessage domain.Message,
-	connectionInfo *domain.ConnectionInfo) error {
+	pionClient *PionClient) error {
 
 	sdp := webrtc.SessionDescription{}
-	if sdpString, ok := incomingMessage.Data.(string); ok {
-		if err := json.Unmarshal([]byte(sdpString), &sdp); err != nil {
-			return err
-		}
-		if sdpErr := peerConnection.SetRemoteDescription(sdp); sdpErr != nil {
-			panic(sdpErr)
-		}
+	if err := json.Unmarshal([]byte(incomingMessage.Data), &sdp); err != nil {
+		return err
+	}
+	if sdpErr := peerConnection.SetRemoteDescription(sdp); sdpErr != nil {
+		panic(sdpErr)
+	}
 
-		// If this is a peer that is going to send an answer, then
-
-		candidatesMux.Lock()
-		defer candidatesMux.Unlock()
-
-		for _, c := range pendingCandidates {
-			if onICECandidateErr := signalCandidate(c, connectionInfo); onICECandidateErr != nil {
-				panic(onICECandidateErr)
-			}
+	// Send our answer to the HTTP server listening in the other process
+	if pionClient.ConnectionInfo.Mode == "R" {
+		sdpMessage := pionClient.OnReadyToSendAnswer(peerConnection)
+		payload, err := json.Marshal(sdpMessage)
+		if err != nil {
+			panic(err)
 		}
 
-	} else {
-		return &AppError{"There was an error parsing SDP of peer"}
+		if err := sendSDPToPeer(payload); err != nil {
+			panic(err)
+		}
+	}
+
+	candidatesMux.Lock()
+	defer candidatesMux.Unlock()
+
+	for _, c := range pendingCandidates {
+		if onICECandidateErr := signalCandidate(c, pionClient.ConnectionInfo); onICECandidateErr != nil {
+			panic(onICECandidateErr)
+		}
 	}
 
 	return nil
@@ -171,17 +178,18 @@ func handleSDP(peerConnection *webrtc.PeerConnection,
 // candidates which may be slower
 
 func handleICECandidate(peerConnection *webrtc.PeerConnection, candidatesMux *sync.Mutex, pendingCandidates []*webrtc.ICECandidate, incomingMessage domain.Message) error {
-	if candidate, ok := incomingMessage.Data.(string); ok {
-		if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: string(candidate)}); candidateErr != nil {
+	var candidate string
+	if err := json.Unmarshal([]byte(incomingMessage.Data), &candidate); err != nil {
+		return &AppError{"There was an error parsing ICE Candidate of peer"}
+	} else {
+		if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: candidate}); candidateErr != nil {
 			return candidateErr
 		}
-	} else {
-		return &AppError{"There was an error parsing ICE Candidate of peer"}
 	}
 	return nil
 }
 
-func parseMessages(peerConnection *webrtc.PeerConnection, candidatesMux *sync.Mutex, pendingCandidates []*webrtc.ICECandidate, connectionInfo *domain.ConnectionInfo) error {
+func (pionClient *PionClient) parseMessages(peerConnection *webrtc.PeerConnection, candidatesMux *sync.Mutex, pendingCandidates []*webrtc.ICECandidate, connectionInfo *domain.ConnectionInfo) error {
 	pendingMessages, err := network.FetchPendingMessages(connectionInfo)
 	if err != nil {
 		return err
@@ -189,7 +197,7 @@ func parseMessages(peerConnection *webrtc.PeerConnection, candidatesMux *sync.Mu
 	for _, pendingMessage := range pendingMessages.Data {
 		switch pendingMessage.Type {
 		case "SDP":
-			if err := handleSDP(peerConnection, candidatesMux, pendingCandidates, pendingMessage, connectionInfo); err != nil {
+			if err := handleSDP(peerConnection, candidatesMux, pendingCandidates, pendingMessage, pionClient); err != nil {
 				return err
 			}
 		case "ICE":
@@ -205,7 +213,7 @@ func parseMessages(peerConnection *webrtc.PeerConnection, candidatesMux *sync.Mu
 	return nil
 }
 
-func pollMessages(stopPolling chan bool, peerConnection *webrtc.PeerConnection,
+func (pionClient *PionClient) pollMessages(stopPolling chan bool, peerConnection *webrtc.PeerConnection,
 	candidatesMux *sync.Mutex,
 	pendingCandidates []*webrtc.ICECandidate,
 	connectionInfo *domain.ConnectionInfo) error {
@@ -214,11 +222,11 @@ func pollMessages(stopPolling chan bool, peerConnection *webrtc.PeerConnection,
 		case <-stopPolling:
 			return nil
 		default:
-			if parseErr := parseMessages(peerConnection, candidatesMux, pendingCandidates, connectionInfo); parseErr != nil {
+			if parseErr := pionClient.parseMessages(peerConnection, candidatesMux, pendingCandidates, connectionInfo); parseErr != nil {
 				return parseErr
 			} else {
 				time.Sleep(2 * time.Second)
-				return pollMessages(stopPolling, peerConnection, candidatesMux, pendingCandidates, connectionInfo)
+				return pionClient.pollMessages(stopPolling, peerConnection, candidatesMux, pendingCandidates, connectionInfo)
 			}
 
 		}
@@ -238,8 +246,13 @@ func sendSDPToPeer(payload []byte) error {
 func signalCandidate(c *webrtc.ICECandidate, connectionInfo *domain.ConnectionInfo) error {
 	//TODO: Send a proper message
 	// Wrap it onto our Message object
+	var candidateBytes []byte
+	var err error
+	if candidateBytes, err = json.Marshal(c.ToJSON().Candidate); err != nil {
+		return err
+	}
 	iceMessage := domain.Message{
-		Data:  c.ToJSON().Candidate,
+		Data:  candidateBytes,
 		From:  (string)(connectionInfo.ID),
 		To:    connectionInfo.Peers[0].ID,
 		Token: connectionInfo.Token,

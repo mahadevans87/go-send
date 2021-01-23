@@ -1,5 +1,9 @@
 package domain
 
+import (
+	"encoding/json"
+)
+
 // SignalBaseURL - Signalling Server Base URL
 const SignalBaseURL = "http://localhost:8080"
 
@@ -21,10 +25,10 @@ type ConnectionInfo struct {
 // Message Data Model
 type Message struct {
 	Type  string
-	Token string      `json:"token"`
-	From  string      `json:"from"`
-	To    string      `json:"to"`
-	Data  interface{} `json:"data"`
+	Token string          `json:"token"`
+	From  string          `json:"from"`
+	To    string          `json:"to"`
+	Data  json.RawMessage `json:"data"`
 }
 
 // Messages -> Pending SDP / Candidate Messages from other clients
