@@ -1,276 +1,46 @@
 package client
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"os"
-	"sync"
-	"time"
-
 	"github.com/mahadevans87/go-send/cli/domain"
-	"github.com/mahadevans87/go-send/cli/network"
-
 	"github.com/pion/webrtc/v3"
 )
 
-// AppError holds generic errors that the app reports.
-type AppError struct {
-	Cause string
+var pionAdapter *PionAdapter
+
+// PionClient - Implementation of PionAdapter Interface to interact with Pion WebRTC Library
+type PionClient struct {
+	ConnectionInfo *domain.ConnectionInfo
+	PeerConnection *webrtc.PeerConnection
 }
 
-func (appError *AppError) Error() string {
-	return fmt.Sprintf(appError.Cause)
+func (pionClient *PionClient) updatePeerConnection(conn *webrtc.PeerConnection) {
+	pionClient.PeerConnection = conn
 }
 
-var connectionInfo *domain.ConnectionInfo
+// OnReadyToSendOffer - Interface implementation of PionAdapter
+func (pionClient *PionClient) OnReadyToSendOffer(peerConn *webrtc.PeerConnection) domain.Message {
 
-// Connect -> Pass in domain.connectionInfo.
-func Connect(connectionInfo *domain.ConnectionInfo) {
-	var candidatesMux sync.Mutex
-	pendingCandidates := make([]*webrtc.ICECandidate, 0)
-	connectionInfo = connectionInfo
-	// Everything below is the Pion WebRTC API! Thanks for using it ❤️.
+	// Store peerConnection so that we can use it later.
+	pionClient.updatePeerConnection(peerConn)
 
-	// Prepare the configuration
-	config := webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{
-				URLs: []string{"stun:stun.l.google.com:19302"},
-			},
-		},
-	}
-
-	// Create a new RTCPeerConnection
-	peerConnection, err := webrtc.NewPeerConnection(config)
-	if err != nil {
-		panic(err)
-	}
-
-	// start polling for client messages
-	stopPolling := make(chan bool, 1)
-	go pollMessages(stopPolling, peerConnection, &candidatesMux, pendingCandidates, connectionInfo)
-
-	// When an ICE candidate is available send to the other Pion instance
-	// the other Pion instance will add this candidate by calling AddICECandidate
-	peerConnection.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
-			return
-		}
-
-		candidatesMux.Lock()
-		defer candidatesMux.Unlock()
-
-		desc := peerConnection.RemoteDescription()
-		if desc == nil {
-			pendingCandidates = append(pendingCandidates, c)
-		} else if onICECandidateErr := signalCandidate(c); err != nil {
-			panic(onICECandidateErr)
-		}
-	})
-
-	// Set the handler for ICE connection state
-	// This will notify you when the peer has connected/disconnected
-	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		fmt.Printf("ICE Connection State has changed: %s\n", connectionState.String())
-	})
-
-	// Create a datachannel with label 'data'
-	dataChannel, err := peerConnection.CreateDataChannel("data", nil)
-	if err != nil {
-		panic(err)
-	}
-	// Register channel opening handling
-	dataChannel.OnOpen(func() {
-		fmt.Printf("Data channel '%s'-'%d' open. Random messages will now be sent to any connected DataChannels every 5 seconds\n", dataChannel.Label(), dataChannel.ID())
-		// Stop polling for any new messages. Connection has been established
-		stopPolling <- true
-		close(stopPolling)
-
-		fileBlock := make([]byte, 65535)
-		file, err := os.Open("/home/mahadevan/apache-maven.tar.gz")
-		if err != nil {
-			panic(err)
-		}
-		defer file.Close()
-		for {
-			n, err := file.Read(fileBlock)
-			if err != nil {
-				if err == io.EOF {
-					break
-				} else {
-					panic(err)
-				}
-			}
-			fmt.Printf("\n Reading %v bytes from file ...", n)
-			dataErr := dataChannel.Send(fileBlock[:n])
-			if dataErr != nil {
-				panic(dataErr)
-			}
-
-		}
-	})
-
-	// Register text message handling
-	dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
-		fmt.Printf("Message from DataChannel '%s': '%s'\n", dataChannel.Label(), string(msg.Data))
-	})
-
-	// Create an offer to send to the other process
-	offer, err := peerConnection.CreateOffer(nil)
+	offer, err := pionClient.PeerConnection.CreateOffer(nil)
 	if err != nil {
 		panic(err)
 	}
 
 	// Sets the LocalDescription, and starts our UDP listeners
 	// Note: this will start the gathering of ICE candidates
-	if err = peerConnection.SetLocalDescription(offer); err != nil {
+	if err = pionClient.PeerConnection.SetLocalDescription(offer); err != nil {
 		panic(err)
 	}
 
 	// Wrap it onto our Message object
 	sdpMessage := domain.Message{
 		Data:  offer.SDP,
-		From:  connectionInfo.ID,
-		To:    connectionInfo.Peers[0].ID,
-		Token: connectionInfo.Token,
+		From:  pionClient.ConnectionInfo.ID,
+		To:    pionClient.ConnectionInfo.Peers[0].ID,
+		Token: pionClient.ConnectionInfo.Token,
 		Type:  "SDP",
 	}
-	// Send our offer to the HTTP server listening in the other process
-	payload, err := json.Marshal(sdpMessage)
-	if err != nil {
-		panic(err)
-	}
-
-	if err := sendSDPToPeer(payload); err != nil {
-		panic(err)
-	}
-
-}
-
-// A handler that processes a SessionDescription given to us from the other Pion process
-func handleSDP(peerConnection *webrtc.PeerConnection, candidatesMux *sync.Mutex, pendingCandidates []*webrtc.ICECandidate, incomingMessage domain.Message) error {
-	sdp := webrtc.SessionDescription{}
-	if sdpString, ok := incomingMessage.Data.(string); ok {
-		if err := json.Unmarshal([]byte(sdpString), &sdp); err != nil {
-			return err
-		}
-		if sdpErr := peerConnection.SetRemoteDescription(sdp); sdpErr != nil {
-			panic(sdpErr)
-		}
-
-		candidatesMux.Lock()
-		defer candidatesMux.Unlock()
-
-		for _, c := range pendingCandidates {
-			if onICECandidateErr := signalCandidate(c); onICECandidateErr != nil {
-				panic(onICECandidateErr)
-			}
-		}
-
-	} else {
-		return &AppError{"There was an error parsing SDP of peer"}
-	}
-
-	return nil
-}
-
-// A handler that allows the other Pion instance to send us ICE candidates
-// This allows us to add ICE candidates faster, we don't have to wait for STUN or TURN
-// candidates which may be slower
-
-func handleICECandidate(peerConnection *webrtc.PeerConnection, candidatesMux *sync.Mutex, pendingCandidates []*webrtc.ICECandidate, incomingMessage domain.Message) error {
-	if candidate, ok := incomingMessage.Data.(string); ok {
-		if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: string(candidate)}); candidateErr != nil {
-			return candidateErr
-		}
-	} else {
-		return &AppError{"There was an error parsing ICE Candidate of peer"}
-	}
-	return nil
-}
-
-func parseMessages(peerConnection *webrtc.PeerConnection, candidatesMux *sync.Mutex, pendingCandidates []*webrtc.ICECandidate, connectionInfo *domain.ConnectionInfo) error {
-	pendingMessages, err := network.FetchPendingMessages(connectionInfo)
-	if err != nil {
-		return err
-	}
-	for _, pendingMessage := range pendingMessages.Data {
-		switch pendingMessage.Type {
-		case "SDP":
-			if err := handleSDP(peerConnection, candidatesMux, pendingCandidates, pendingMessage); err != nil {
-				return err
-			}
-		case "ICE":
-			if err := handleICECandidate(peerConnection, candidatesMux, pendingCandidates, pendingMessage); err != nil {
-				return err
-			}
-		case "OFFER":
-		case "ANSWER":
-		default:
-			return &AppError{"There was an error parsing an incoming message of unkown type"}
-		}
-	}
-	return nil
-}
-
-func pollMessages(stopPolling chan bool, peerConnection *webrtc.PeerConnection,
-	candidatesMux *sync.Mutex,
-	pendingCandidates []*webrtc.ICECandidate,
-	connectionInfo *domain.ConnectionInfo) error {
-	for {
-		select {
-		case <-stopPolling:
-			return nil
-		default:
-			if parseErr := parseMessages(peerConnection, candidatesMux, pendingCandidates, connectionInfo); parseErr != nil {
-				return parseErr
-			} else {
-				time.Sleep(2 * time.Second)
-				return pollMessages(stopPolling, peerConnection, candidatesMux, pendingCandidates, connectionInfo)
-			}
-
-		}
-	}
-}
-
-func sendSDPToPeer(payload []byte) error {
-	resp, err := http.Post(fmt.Sprintf("%s/message", domain.SignalBaseURL), "application/json; charset=utf-8", bytes.NewReader(payload))
-	if err != nil {
-		return err
-	} else if err := resp.Body.Close(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func signalCandidate(c *webrtc.ICECandidate) error {
-	//TODO: Send a proper message
-	// Wrap it onto our Message object
-	iceMessage := domain.Message{
-		Data:  c.ToJSON().Candidate,
-		From:  (string)(connectionInfo.ID),
-		To:    connectionInfo.Peers[0].ID,
-		Token: connectionInfo.Token,
-		Type:  "ICE",
-	}
-	payload, err := json.Marshal(iceMessage)
-	if err != nil {
-		return err
-	}
-
-	resp, err := http.Post(fmt.Sprintf("%s/message", domain.SignalBaseURL),
-		"application/json; charset=utf-8", bytes.NewReader(payload))
-
-	if err != nil {
-		return err
-	}
-
-	if closeErr := resp.Body.Close(); closeErr != nil {
-		return closeErr
-	}
-
-	return nil
+	return sdpMessage
 }
