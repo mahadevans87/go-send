@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -46,6 +44,8 @@ func (pionClient *PionClient) Connect() {
 		panic(err)
 	}
 
+	pionClient.PeerConnection = peerConnection
+
 	// start polling for client messages
 	stopPolling := make(chan bool, 1)
 	go pionClient.pollMessages(stopPolling, peerConnection, &candidatesMux, pendingCandidates, pionClient.ConnectionInfo)
@@ -74,52 +74,10 @@ func (pionClient *PionClient) Connect() {
 		fmt.Printf("ICE Connection State has changed: %s\n", connectionState.String())
 	})
 
-	// Create a datachannel with label 'data'
-	dataChannel, err := peerConnection.CreateDataChannel("data", nil)
-	if err != nil {
-		panic(err)
-	}
-	// Register channel opening handling
-	dataChannel.OnOpen(func() {
-		fmt.Printf("Data channel '%s'-'%d' open. Random messages will now be sent to any connected DataChannels every 5 seconds\n", dataChannel.Label(), dataChannel.ID())
-		// Stop polling for any new messages. Connection has been established
-		stopPolling <- true
-		close(stopPolling)
-
-		fileBlock := make([]byte, 65535)
-		file, err := os.Open("/home/mahadevan/apache-maven.tar.gz")
-		if err != nil {
-			panic(err)
-		}
-		defer file.Close()
-		for {
-			n, err := file.Read(fileBlock)
-			if err != nil {
-				if err == io.EOF {
-					break
-				} else {
-					panic(err)
-				}
-			}
-			fmt.Printf("\n Reading %v bytes from file ...", n)
-			dataErr := dataChannel.Send(fileBlock[:n])
-			if dataErr != nil {
-				panic(dataErr)
-			}
-
-		}
-		fmt.Println("Done!")
-	})
-
-	// Register text message handling
-	dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
-		fmt.Printf("Message from DataChannel '%s': '%s'\n", dataChannel.Label(), string(msg.Data))
-	})
-
 	// Create an offer to send to the other process
 	if pionClient.ConnectionInfo.Mode == "S" {
+		pionClient.setupDataChannelForSender(stopPolling)
 		sdpMessage := pionClient.OnReadyToSendOffer(peerConnection)
-
 		// Send our offer to the HTTP server listening in the other process
 		payload, err := json.Marshal(sdpMessage)
 		if err != nil {
@@ -129,8 +87,48 @@ func (pionClient *PionClient) Connect() {
 		if err := sendSDPToPeer(payload); err != nil {
 			panic(err)
 		}
+
+	} else if pionClient.ConnectionInfo.Mode == "R" {
+		pionClient.setupDataChannelForReceiver(stopPolling)
 	}
 
+}
+
+func (pionClient *PionClient) setupDataChannelForSender(stopPolling chan bool) {
+	// Create a datachannel with label 'data'
+	dataChannel, err := pionClient.PeerConnection.CreateDataChannel("data", nil)
+	if err != nil {
+		panic(err)
+	}
+	// Register channel opening handling Only for sender
+	dataChannel.OnOpen(func() {
+		// Stop polling for any new messages. Connection has been established
+		stopPolling <- true
+		close(stopPolling)
+		pionClient.OnDataChannelOpened(dataChannel)
+	})
+
+	// Register text message handling
+	dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
+		fmt.Printf("Message from DataChannel '%s': '%s'\n", dataChannel.Label(), string(msg.Data))
+	})
+}
+
+func (pionClient *PionClient) setupDataChannelForReceiver(stopPolling chan bool) {
+	// Register data channel creation handling
+	pionClient.PeerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
+		fmt.Printf("\nNew DataChannel to receive ...%s %d\n", d.Label(), d.ID())
+
+		// Register channel opening handling
+		d.OnOpen(func() {
+			stopPolling <- true
+			close(stopPolling)
+			fmt.Printf("\nData channel '%s'-'%d' open. \n", d.Label(), d.ID())
+		})
+
+		// Register text message handling
+		d.OnMessage(pionClient.OnDataChannelMessage)
+	})
 }
 
 // A handler that processes a SessionDescription given to us from the other Pion process
