@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 )
@@ -10,6 +11,7 @@ import (
 type PeerInfo struct {
 	Token    string       `json:"token"`
 	ID       string       `json:"id"`
+	Mode     string       `json:"mode"`
 	Messages chan Message `json:"-"`
 }
 
@@ -22,31 +24,77 @@ type Message struct {
 	Data  interface{} `json:"data"`
 }
 
+type SafePeerInfo struct {
+	mu       sync.Mutex
+	internal map[string][]*PeerInfo
+}
+
+func (s *SafePeerInfo) addTokenToPeer(token string, peerInfo *PeerInfo) {
+	s.mu.Lock()
+	if s.internal[token] == nil {
+		s.internal[token] = make([]*PeerInfo, 0)
+	}
+	s.internal[token] = append(s.internal[token], peerInfo)
+	s.mu.Unlock()
+}
+
+func (s *SafePeerInfo) removePeerFromToken(token string, peerInfo *PeerInfo) {
+	s.mu.Lock()
+	if s.internal[token] != nil {
+		var updatedPeerInfo []*PeerInfo
+		for idx, peer := range s.internal[token] {
+			if peer.ID == peerInfo.ID {
+				updatedPeerInfo = append(s.internal[token][:idx], s.internal[token][idx+1:]...)
+				break
+			}
+		}
+		s.internal[token] = updatedPeerInfo
+	}
+	s.mu.Unlock()
+}
+
+func (s *SafePeerInfo) peersForToken(token string, id string) []*PeerInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	peers := s.internal[token]
+	for _, peer := range peers {
+		if peer.ID == id {
+			foundPeer = true;
+		}
+	}
+}
+
+func (s *SafePeerInfo) 
+
 func main() {
 	r := gin.Default()
 
 	// Make a map of token-peerInfos
-	tokenPeers := make(map[string][]*PeerInfo)
+	tokenPeers := &SafePeerInfo{
+		internal: make(map[string][]*PeerInfo),
+	}
 
 	r.POST("/register", func(c *gin.Context) {
 		var peerInfo PeerInfo
 		token := c.Query("token")
-		peers := tokenPeers[token]
-		if peers == nil {
-			peers = make([]*PeerInfo, 0)
-			tokenPeers[token] = peers
-		}
+		mode := c.Query("mode")
+		peers := tokenPeers.peersForToken(token)
 		if len(peers) == 2 {
 			c.JSON(400, gin.H{
 				"error": "Cannot add additional peer to token",
+			})
+		} else if len(peers) == 1 && peers[0].Mode == mode {
+			// There can only be one sender with a particular mode
+			c.JSON(400, gin.H{
+				"error": "There is a peer with the same mode already logged in.",
 			})
 		} else {
 			peerID := len(peers) + 1
 			peerInfo.ID = fmt.Sprint(peerID)
 			peerInfo.Token = token
+			peerInfo.Mode = mode
 			peerInfo.Messages = make(chan Message, 10)
-			peers = append(peers, &peerInfo)
-			tokenPeers[token] = peers
+			tokenPeers.addTokenToPeer(token, &peerInfo)
 			c.JSON(200, gin.H{
 				"message": "OK",
 				"peerId":  peerInfo.ID,
@@ -59,7 +107,7 @@ func main() {
 		peerID := c.Query("id")
 		foundPeer := false
 		resultPeers := make([]*PeerInfo, 0)
-		if peers := tokenPeers[token]; peers != nil {
+		if peers := tokenPeers.peersForToken(token, id); peers != nil {
 			for _, peer := range peers {
 				if peerID == peer.ID {
 					foundPeer = true
